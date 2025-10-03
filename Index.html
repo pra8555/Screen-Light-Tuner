@@ -1,0 +1,576 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Interactive Color Light App</title>
+    <!-- Load Tailwind CSS -->
+    <script src="https://cdn.tailwindcss.com"></script>
+    <style>
+        /* Custom styles for full-screen and pointer behavior */
+        #light-screen {
+            touch-action: none; /* Mobile पर डिफ़ॉल्ट ब्राउज़र क्रियाओं को रोकने के लिए महत्वपूर्ण */
+            cursor: pointer;
+            user-select: none;
+            -webkit-user-select: none;
+            -moz-user-select: none;
+            -ms-user-select: none;
+        }
+
+        /* Fade out instruction animation */
+        @keyframes fadeOut {
+            from { opacity: 1; }
+            to { opacity: 0; }
+        }
+        .fade-out {
+            animation: fadeOut 8s forwards;
+        }
+
+        /* Canvas interaction areas */
+        .color-canvas {
+            touch-action: none;
+            user-select: none;
+            border-radius: 4px;
+        }
+    </style>
+    <script>
+        tailwind.config = {
+            theme: {
+                extend: {
+                    fontFamily: {
+                        sans: ['Inter', 'sans-serif'],
+                    },
+                }
+            }
+        }
+    </script>
+    
+    <!-- PWA (Progressive Web App) Setup Links -->
+    <!-- यह फ़ाइल ऐप के आइकन और नाम को परिभाषित करती है -->
+    <link rel="manifest" href="/manifest.webmanifest">
+</head>
+<body class="font-sans">
+
+    <!-- The main screen container that acts as the light -->
+    <div id="light-screen" class="w-screen h-screen transition-colors duration-100 ease-linear flex items-center justify-center bg-gray-50">
+    </div>
+
+    <!-- Instructions Overlay (Temporary, fades out) -->
+    <div id="instructions" class="fixed inset-x-0 bottom-4 mx-auto p-3 max-w-sm bg-black/50 text-white text-center rounded-xl shadow-lg fade-out z-40 text-sm">
+        <p class="font-bold">स्क्रीन पर टैप करें:</p>
+        <p class="mb-2">कस्टम रंग पिकर खोलें</p>
+        <div class="flex justify-around">
+            <div class="text-left border-r border-white/20 pr-4">
+                <p class="font-bold">बाएँ हिस्से पर स्वाइप (Horizontal):</p>
+                <p>रंग (Hue) बदलें</p>
+            </div>
+            <div class="text-right pl-4">
+                <p class="font-bold">दाएँ हिस्से पर स्वाइप (Horizontal/Vertical):</p>
+                <p>ब्राइटनेस (Lightness) बदलें</p>
+            </div>
+        </div>
+    </div>
+
+    <!-- Color Picker Modal (Hidden by default) -->
+    <div id="color-picker-modal" class="fixed inset-0 bg-black/50 backdrop-blur-sm hidden flex items-center justify-center p-4 z-50">
+        <div class="w-full max-w-sm bg-gray-800 p-6 rounded-2xl shadow-2xl text-white">
+            <h2 class="text-xl font-semibold mb-4">एक रंग चुनें</h2>
+            
+            <div class="flex space-x-2">
+                <!-- Saturation/Value (SV) Square Container -->
+                <div class="relative flex-grow h-48">
+                    <canvas id="sv-canvas" width="280" height="280" class="color-canvas w-full h-full"></canvas>
+                    <!-- Selector for SV Square -->
+                    <div id="sv-selector" class="absolute w-3 h-3 rounded-full border border-black ring-1 ring-white pointer-events-none shadow-md" style="background-color: transparent;"></div>
+                </div>
+
+                <!-- Hue Slider Container -->
+                <div class="relative w-8 h-48">
+                    <canvas id="hue-canvas" width="30" height="280" class="color-canvas w-full h-full"></canvas>
+                    <!-- Selector for Hue Slider -->
+                    <div id="hue-selector" class="absolute left-1/2 -ml-1 w-6 h-1.5 rounded-sm border-2 border-black pointer-events-none shadow-xl bg-white"></div>
+                </div>
+            </div>
+
+            <!-- Display Area (Current Color & Preview) -->
+            <div class="flex justify-between items-center mt-4">
+                <div id="prev-color-preview" class="w-20 h-8 rounded-lg shadow-inner bg-gray-500 border border-gray-700"></div>
+                <span class="text-indigo-400 font-bold text-xl">→</span>
+                <div id="current-color-preview" class="w-20 h-8 rounded-lg shadow-lg" style="background-color: hsl(0, 0%, 95%);"></div>
+            </div>
+
+            <div class="flex justify-end space-x-4 mt-6">
+                <button id="cancel-picker" class="py-2 px-4 rounded-xl font-semibold text-gray-400 hover:text-white transition-colors">
+                    कैंसिल करें
+                </button>
+                <button id="ok-picker" class="py-2 px-4 rounded-xl font-bold bg-indigo-600 hover:bg-indigo-500 transition-colors shadow-lg">
+                    ओके
+                </button>
+            </div>
+        </div>
+    </div>
+
+    <script>
+        // --- Global State Variables for Screen Color (using HSL for consistency) ---
+        let currentH = 0;   // Hue (0-360)
+        let currentS = 0;   // Saturation (0-100)
+        let currentL = 95;  // Lightness (0-100) - For brightness control
+        
+        // Picker State (HSV/HSB)
+        let pickerH = 0;
+        let pickerS = 0;
+        let pickerV = 95; 
+
+        let initialH, initialS, initialL; // For Cancel button logic
+
+        // --- Touch/Swipe State for Screen Control ---
+        let startX, startY;       
+        let initialX, initialY;   
+        let touchStartTime;       
+        let isDragging = false;
+        let isPickerOpen = false;
+
+        // --- DOM Elements ---
+        const screen = document.getElementById('light-screen');
+        const modal = document.getElementById('color-picker-modal');
+        const okButton = document.getElementById('ok-picker');
+        const cancelButton = document.getElementById('cancel-picker');
+        const instructions = document.getElementById('instructions');
+        const prevColorPreview = document.getElementById('prev-color-preview');
+        const currentColorPreview = document.getElementById('current-color-preview');
+
+        // --- Canvas Picker State & Elements ---
+        const svCanvas = document.getElementById('sv-canvas');
+        const svCtx = svCanvas.getContext('2d');
+        const svSelector = document.getElementById('sv-selector');
+        
+        const hueCanvas = document.getElementById('hue-canvas');
+        const hueCtx = hueCanvas.getContext('2d');
+        const hueSelector = document.getElementById('hue-selector');
+        
+        let isPickingHue = false;
+        let isPickingSV = false;
+
+        // --- HSL <-> HSV/HSB Conversion Utilities ---
+        
+        /**
+         * HSL को HSV में परिवर्तित करता है।
+         * @param {number} h Hue (0-360)
+         * @param {number} s Saturation (0-100)
+         * @param {number} l Lightness (0-100)
+         * @returns {[number, number, number]} [h, s, v]
+         */
+        function hslToHsv(h, s, l) {
+            s /= 100;
+            l /= 100;
+            const v = l + s * Math.min(l, 1 - l);
+            const sv = v === 0 ? 0 : 2 * (1 - l / v);
+            return [h, sv * 100, v * 100];
+        }
+
+        /**
+         * HSV को HSL में परिवर्तित करता है।
+         * @param {number} h Hue (0-360)
+         * @param {number} s Saturation (0-100)
+         * @param {number} v Value (0-100)
+         * @returns {[number, number, number]} [h, s, l]
+         */
+        function hsvToHsl(h, s, v) {
+            s /= 100;
+            v /= 100;
+            const l = v * (1 - s / 2);
+            const ls = l === 0 || l === 1 ? 0 : (v - l) / Math.min(l, 1 - l);
+            return [h, ls * 100, l * 100];
+        }
+
+        // --- Core Application Functions ---
+
+        /**
+         * वर्तमान HSL स्थिति को स्क्रीन पृष्ठभूमि पर लागू करता है।
+         */
+        function updateScreenColor() {
+            // H को रैप करें, और S/L को 0-100 के बीच सीमित करें
+            const h = (currentH % 360 + 360) % 360;
+            const s = Math.max(0, Math.min(100, currentS));
+            const l = Math.max(0, Math.min(100, currentL));
+
+            const color = `hsl(${h.toFixed(0)}, ${s.toFixed(0)}%, ${l.toFixed(0)}%)`;
+            screen.style.backgroundColor = color;
+            currentColorPreview.style.backgroundColor = color;
+        }
+        
+        /**
+         * पिकर की HSV स्थिति को HSL में वापस बदलता है और मुख्य स्थिति को अपडेट करता है।
+         */
+        function updateMainStateFromPicker() {
+            const [h, s, l] = hsvToHsl(pickerH, pickerS, pickerV);
+            currentH = h;
+            currentS = s;
+            currentL = l;
+            updateScreenColor();
+        }
+
+        // --- Canvas Drawing Functions ---
+
+        /**
+         * Hue gradient slider को खींचता है।
+         */
+        function drawHueSlider() {
+            const width = hueCanvas.width;
+            const height = hueCanvas.height;
+
+            const gradient = hueCtx.createLinearGradient(0, 0, 0, height);
+            gradient.addColorStop(0, 'hsl(0, 100%, 50%)');
+            gradient.addColorStop(0.17, 'hsl(60, 100%, 50%)');
+            gradient.addColorStop(0.33, 'hsl(120, 100%, 50%)');
+            gradient.addColorStop(0.50, 'hsl(180, 100%, 50%)');
+            gradient.addColorStop(0.67, 'hsl(240, 100%, 50%)');
+            gradient.addColorStop(0.83, 'hsl(300, 100%, 50%)');
+            gradient.addColorStop(1, 'hsl(360, 100%, 50%)');
+            
+            hueCtx.fillStyle = gradient;
+            hueCtx.fillRect(0, 0, width, height);
+        }
+
+        /**
+         * वर्तमान Hue के आधार पर Saturation/Value square को खींचता है।
+         */
+        function drawSVSquare() {
+            const width = svCanvas.width;
+            const height = svCanvas.height;
+            const brightColor = `hsl(${pickerH}, 100%, 50%)`;
+
+            // 1. Base color (Hue सेट करता है)
+            svCtx.fillStyle = brightColor;
+            svCtx.fillRect(0, 0, width, height);
+
+            // 2. Overlay White-to-Transparent gradient (Saturation/x-axis)
+            const saturationGradient = svCtx.createLinearGradient(0, 0, width, 0);
+            saturationGradient.addColorStop(0, 'rgba(255, 255, 255, 1)'); // White (S=0)
+            saturationGradient.addColorStop(1, 'rgba(255, 255, 255, 0)'); // Full Saturation (S=100)
+            svCtx.fillStyle = saturationGradient;
+            svCtx.fillRect(0, 0, width, height);
+
+            // 3. Overlay Black-to-Transparent gradient (Value/y-axis)
+            const valueGradient = svCtx.createLinearGradient(0, 0, 0, height);
+            valueGradient.addColorStop(0, 'rgba(0, 0, 0, 0)'); // Full Value (V=100)
+            valueGradient.addColorStop(1, 'rgba(0, 0, 0, 1)'); // Black (V=0)
+            svCtx.fillStyle = valueGradient;
+            svCtx.fillRect(0, 0, width, height);
+        }
+
+        /**
+         * वर्तमान pickerH, pickerS, pickerV के आधार पर चयनकर्ताओं की स्थिति अपडेट करता है।
+         */
+        function updateSelectorPositions() {
+            const h = pickerH;
+            const s = pickerS;
+            const v = pickerV;
+
+            // 1. Hue Selector (Vertical position)
+            const hueHeight = hueCanvas.offsetHeight;
+            const hY = (h / 360) * hueHeight; 
+            hueSelector.style.top = `${hY - hueSelector.offsetHeight / 2}px`;
+
+            // 2. Saturation/Value Selector (X/Y position)
+            const svWidth = svCanvas.offsetWidth;
+            const svHeight = svCanvas.offsetHeight;
+            
+            const svX = (s / 100) * svWidth;
+            const svY = (100 - v) / 100 * svHeight;
+            
+            svSelector.style.left = `${svX - svSelector.offsetWidth / 2}px`;
+            svSelector.style.top = `${svY - svSelector.offsetHeight / 2}px`;
+            
+            const selectedColor = `hsl(${hsvToHsl(h, s, v).join(', ')})`;
+            svSelector.style.backgroundColor = selectedColor;
+            currentColorPreview.style.backgroundColor = selectedColor;
+        }
+        
+        // --- Picker Interaction Logic ---
+
+        function getCanvasMousePosition(e, canvasEl) {
+            const rect = canvasEl.getBoundingClientRect();
+            let clientX, clientY;
+            
+            if (e.touches && e.touches.length > 0) {
+                clientX = e.touches[0].clientX;
+                clientY = e.touches[0].clientY;
+            } else {
+                clientX = e.clientX;
+                clientY = e.clientY;
+            }
+
+            return {
+                x: clientX - rect.left,
+                y: clientY - rect.top,
+                width: rect.width,
+                height: rect.height
+            };
+        }
+
+        /**
+         * Hue slider पर हलचल को संभालता है।
+         */
+        function handleHueMove(pos) {
+            let relativeY = Math.max(0, Math.min(1, pos.y / pos.height));
+            pickerH = Math.round(relativeY * 360);
+            
+            drawSVSquare();
+            updateSelectorPositions();
+            updateMainStateFromPicker(); // लाइव प्रीव्यू के लिए मुख्य स्थिति को अस्थायी रूप से अपडेट करें
+        }
+
+        /**
+         * Saturation/Value square पर हलचल को संभालता है।
+         */
+        function handleSVMove(pos) {
+            let relativeX = Math.max(0, Math.min(1, pos.x / pos.width));
+            let relativeY = Math.max(0, Math.min(1, pos.y / pos.height));
+            
+            pickerS = Math.round(relativeX * 100);
+            pickerV = Math.round(100 - (relativeY * 100));
+
+            updateSelectorPositions();
+            updateMainStateFromPicker(); // लाइव प्रीव्यू के लिए मुख्य स्थिति को अस्थायी रूप से अपडेट करें
+        }
+
+        // --- Picker Event Listeners ---
+
+        function startPicking(e) {
+            e.preventDefault();
+            const targetId = e.target.id;
+            
+            if (targetId === 'hue-canvas') {
+                isPickingHue = true;
+                handleHueMove(getCanvasMousePosition(e, hueCanvas));
+            } else if (targetId === 'sv-canvas') {
+                isPickingSV = true;
+                handleSVMove(getCanvasMousePosition(e, svCanvas));
+            }
+        }
+
+        function movePicking(e) {
+            e.preventDefault();
+            if (isPickingHue) {
+                handleHueMove(getCanvasMousePosition(e, hueCanvas));
+            } else if (isPickingSV) {
+                handleSVMove(getCanvasMousePosition(e, svCanvas));
+            }
+        }
+
+        function stopPicking() {
+            isPickingHue = false;
+            isPickingSV = false;
+        }
+
+        // Attach picker events 
+        svCanvas.addEventListener('mousedown', startPicking);
+        svCanvas.addEventListener('touchstart', startPicking);
+        hueCanvas.addEventListener('mousedown', startPicking);
+        hueCanvas.addEventListener('touchstart', startPicking);
+        
+        window.addEventListener('mousemove', movePicking);
+        window.addEventListener('touchmove', movePicking);
+        window.addEventListener('mouseup', stopPicking);
+        window.addEventListener('touchend', stopPicking);
+        window.addEventListener('touchcancel', stopPicking);
+
+        // --- Modal Control Functions ---
+
+        /**
+         * रंग चयन modal खोलता है।
+         */
+        function openColorPicker() {
+            if (isPickerOpen) return;
+            isPickerOpen = true;
+            modal.classList.remove('hidden');
+
+            initialH = currentH;
+            initialS = currentS;
+            initialL = currentL;
+            
+            [pickerH, pickerS, pickerV] = hslToHsv(currentH, currentS, currentL);
+
+            prevColorPreview.style.backgroundColor = `hsl(${initialH}, ${initialS}%, ${initialL}%)`;
+
+            drawHueSlider();
+            drawSVSquare();
+            updateSelectorPositions();
+        }
+
+        /**
+         * रंग चयन modal बंद करता है और स्क्रीन रंग स्थिति को अपडेट करता है (OK)।
+         */
+        function closePickerOK() {
+            if (!isPickerOpen) return;
+            isPickerOpen = false;
+            modal.classList.add('hidden');
+            updateScreenColor();
+        }
+
+        /**
+         * रंग चयन modal बंद करता है और रंग को रीसेट करता है (CANCEL)।
+         */
+        function closePickerCancel() {
+            if (!isPickerOpen) return;
+            isPickerOpen = false;
+            modal.classList.add('hidden');
+
+            currentH = initialH;
+            currentS = initialS;
+            currentL = initialL;
+            updateScreenColor();
+        }
+
+        // Attach listeners for the buttons
+        okButton.addEventListener('click', closePickerOK);
+        cancelButton.addEventListener('click', closePickerCancel);
+
+        // --- Main Screen Touch/Mouse Swipe Logic (Segmented Control) ---
+
+        const TAP_THRESHOLD_DISTANCE = 10; 
+        const TAP_THRESHOLD_TIME = 300;    
+
+        /**
+         * मुख्य स्क्रीन पर टच या माउस इंटरेक्शन की शुरुआत को संभालता है।
+         */
+        function handleTouchStartMain(e) {
+            if (isPickerOpen) return;
+            if (e.touches) e.preventDefault(); 
+            
+            isDragging = false;
+            touchStartTime = Date.now(); 
+
+            const clientX = e.touches ? e.touches[0].clientX : e.clientX;
+            const clientY = e.touches ? e.touches[0].clientY : e.clientY;
+            
+            startX = clientX; 
+            startY = clientY;
+            initialX = clientX; 
+            initialY = clientY;
+        }
+
+        /**
+         * मुख्य स्क्रीन पर टच या माउस इंटरेक्शन (स्वाइप) की हलचल को संभालता है।
+         */
+        function handleTouchMoveMain(e) {
+            if (isPickerOpen) return;
+            if (e.touches) e.preventDefault();
+
+            const clientX = e.touches ? e.touches[0].clientX : e.clientX;
+            const clientY = e.touches ? e.touches[0].clientY : e.clientY;
+            
+            const totalDeltaX = clientX - initialX;
+            const totalDeltaY = clientY - initialY;
+            
+            // 5 पिक्सल से अधिक हलचल होने पर इसे ड्रैग माना जाता है
+            if (Math.abs(totalDeltaX) > 5 || Math.abs(totalDeltaY) > 5) {
+                isDragging = true;
+            }
+
+            if (!isDragging) return;
+
+            const deltaX = clientX - startX;
+            const deltaY = clientY - startY;
+            const sensitivity = 0.4; 
+            
+            // स्क्रीन के बाएँ या दाएँ हिस्से पर इंटरेक्शन निर्धारित करें
+            const screenWidth = screen.offsetWidth;
+            const interactionX = clientX; 
+            const isLeftHalf = interactionX < screenWidth / 2;
+
+            if (isLeftHalf) {
+                // बायाँ आधा: Horizontal स्लाइड Hue (रंग) बदलता है
+                currentH += deltaX * sensitivity; 
+                 // सफेद/ग्रे से शुरू होने पर कुछ saturation सुनिश्चित करें
+                if (currentS < 10) currentS = 70; 
+            } else {
+                // दायाँ आधा: Horizontal या Vertical स्लाइड Lightness (ब्राइटनेस) बदलता है
+                
+                // Lightness को चलाने के लिए सबसे बड़े निरपेक्ष परिवर्तन (X या Y) का उपयोग करें
+                if (Math.abs(deltaX) > Math.abs(deltaY)) {
+                    // Horizontal स्वाइप (बाएँ/दाएँ) brightness के लिए
+                    currentL += deltaX * sensitivity * 0.75; 
+                } else {
+                    // Vertical स्वाइप (ऊपर/नीचे) brightness के लिए
+                    // ऊपर स्वाइप करने पर lightness बढ़ती है
+                    currentL -= deltaY * sensitivity * 0.75; 
+                }
+
+                // Lightness (0-100) को सीमित करें
+                currentL = Math.max(0, Math.min(100, currentL));
+            }
+            
+            updateScreenColor();
+
+            // निरंतर सहज परिवर्तन के लिए प्रारंभिक बिंदुओं को अपडेट करें
+            startX = clientX;
+            startY = clientY;
+        }
+
+        /**
+         * मुख्य स्क्रीन पर टच या माउस इंटरेक्शन के अंत को संभालता है।
+         */
+        function handleTouchEndMain(e) {
+            if (isPickerOpen) return;
+
+            const clientX = e.changedTouches ? e.changedTouches[0].clientX : initialX;
+            const clientY = e.changedTouches ? e.changedTouches[0].clientY : initialY;
+
+            const moveDistance = Math.sqrt(
+                Math.pow(clientX - initialX, 2) + Math.pow(clientY - initialY, 2)
+            );
+            
+            const tapDuration = Date.now() - touchStartTime;
+
+            // अगर यह एक सच्चा टैप था (कम अवधि, कम दूरी), तो पिकर खोलें
+            const isTap = moveDistance < TAP_THRESHOLD_DISTANCE && tapDuration < TAP_THRESHOLD_TIME; 
+            
+            if (isTap && !isDragging) {
+                openColorPicker();
+            }
+            
+            isDragging = false;
+        }
+
+        // --- Event Listener Registration for Main Screen ---
+        screen.addEventListener('touchstart', handleTouchStartMain);
+        screen.addEventListener('touchmove', handleTouchMoveMain);
+        screen.addEventListener('touchend', handleTouchEndMain);
+        screen.addEventListener('touchcancel', handleTouchEndMain);
+        screen.addEventListener('mousedown', (e) => {
+            if (e.button === 0) handleTouchStartMain(e);
+        });
+        screen.addEventListener('mousemove', (e) => {
+            if (e.buttons === 1) handleTouchMoveMain(e);
+        });
+        screen.addEventListener('mouseup', handleTouchEndMain);
+        screen.addEventListener('mouseleave', () => {
+             if (isDragging) isDragging = false;
+        });
+
+
+        // Initial load
+        window.onload = () => {
+            updateScreenColor();
+            // 8 सेकंड के बाद निर्देश छिपाएँ
+            setTimeout(() => {
+                const instructions = document.getElementById('instructions');
+                if (instructions) instructions.style.display = 'none';
+            }, 8000); 
+            
+            // PWA Service Worker को रजिस्टर करें
+            if ('serviceWorker' in navigator) {
+                window.addEventListener('load', () => {
+                    navigator.serviceWorker.register('/service-worker.js')
+                      .then(registration => console.log('Service Worker registered successfully.'))
+                      .catch(registrationError => console.error('Service Worker registration failed: ', registrationError));
+                });
+            }
+        };
+
+    </script>
+</body>
+</html>
+
